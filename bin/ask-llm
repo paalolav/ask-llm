@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Send a prompt to a LiteLLM-backed model. Optional file paths for context.
+
+Config is loaded from ~/.config/ask-llm.env (KEY=VALUE), overridable by env:
+  ASK_LLM_URL      OpenAI-compatible /v1/chat/completions endpoint
+  ASK_LLM_MODEL    Model alias (e.g. qwen3.6-35b)
+  ASK_LLM_AUTH     Bearer token (LiteLLM accepts "dummy" by default)
+  ASK_LLM_TIMEOUT  Seconds, default 180
+
+Usage:
+  ask-llm "prompt"                              # text Q&A
+  ask-llm -q "question" --paths f1.py f2.py     # multi-file Q&A. Files are
+                                                # wrapped in <file path='X'>
+                                                # ...</file> for stable
+                                                # KV-cache prefix
+  ask-llm -q "spec" --context style.py          # generate matching style
+  ask-llm -q "spec" --paths f.py --target out.py  # write reply to file
+"""
+import argparse, json, os, sys, urllib.request
+from pathlib import Path
+
+CONFIG_FILE = Path("~/.config/ask-llm.env").expanduser()
+
+
+def load_config():
+    if CONFIG_FILE.is_file():
+        for line in CONFIG_FILE.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+DENY_SUBSTR = (".ssh/", ".aws/", ".gnupg/", "Library/Keychains/",
+               "/.env", "/credentials", "/.netrc", "/.pgpass",
+               "/master.passwd", "/shadow")
+DENY_NAMES = {".env", ".netrc", ".pgpass", "credentials", "master.passwd", "shadow"}
+DENY_KEY_PREFIX = ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")
+DENY_SUFFIX = {".pem", ".key"}
+
+
+def safe_read(path_str):
+    p = Path(path_str).expanduser().resolve()
+    s, name = str(p), p.name
+    if any(d in s for d in DENY_SUBSTR):
+        sys.exit(f"refused: {p} matches secret-path pattern")
+    if name in DENY_NAMES:
+        sys.exit(f"refused: {p}")
+    if any(name.startswith(k) for k in DENY_KEY_PREFIX) and not name.endswith(".pub"):
+        sys.exit(f"refused: {p} looks like an SSH private key")
+    if p.suffix in DENY_SUFFIX:
+        sys.exit(f"refused: {p}")
+    if not p.is_file():
+        sys.exit(f"not a file: {p}")
+    return p, p.read_text(errors="replace")
+
+
+def main():
+    load_config()
+    url = os.environ.get("ASK_LLM_URL")
+    auth = os.environ.get("ASK_LLM_AUTH", "dummy")
+    default_model = os.environ.get("ASK_LLM_MODEL")
+    timeout = int(os.environ.get("ASK_LLM_TIMEOUT", "180"))
+    if not url or not default_model:
+        sys.exit("ASK_LLM_URL and ASK_LLM_MODEL must be set "
+                 "(in env or ~/.config/ask-llm.env). See .env.example.")
+
+    ap = argparse.ArgumentParser(description="LiteLLM CLI client")
+    ap.add_argument("prompt", nargs="*", help="Question/spec (or use -q)")
+    ap.add_argument("-q", "--question",
+                    help="Question/spec — use this when --paths is set, "
+                         "since --paths is greedy")
+    ap.add_argument("--paths", nargs="+", help="Files to include as corpus")
+    ap.add_argument("--context",
+                    help="Single style-reference file for generation")
+    ap.add_argument("--target", help="Write response to file (default: stdout)")
+    ap.add_argument("--model", default=default_model)
+    ap.add_argument("--max-tokens", type=int, default=4096)
+    ap.add_argument("--temperature", type=float, default=0.3)
+    args = ap.parse_args()
+
+    prompt = args.question or " ".join(args.prompt)
+    if not prompt:
+        ap.error("question required (positional or -q)")
+
+    if args.paths:
+        chunks = []
+        for ps in args.paths:
+            p, content = safe_read(ps)
+            chunks.append(f"<file path='{p}'>\n{content}\n</file>")
+            print(f"[ask-llm: read {p} ({len(content)}c)]", file=sys.stderr)
+        messages = [
+            {"role": "system", "content":
+             "Precise code/document analyst. Read the files and answer concisely. "
+             "Quote file paths and line numbers when relevant. Bullets, not prose."},
+            {"role": "user", "content": f"<corpus>\n{chr(10).join(chunks)}\n</corpus>"},
+            {"role": "user", "content": prompt},
+        ]
+    elif args.context:
+        p, content = safe_read(args.context)
+        print(f"[ask-llm: context {p} ({len(content)}c)]", file=sys.stderr)
+        messages = [
+            {"role": "system", "content":
+             "Generate clean, idiomatic code matching the reference style. "
+             "Output ONLY file contents — no explanations, no markdown fences."},
+            {"role": "user", "content":
+             f"<reference>\n{content}\n</reference>\nWrite: {prompt}"},
+        ]
+    else:
+        messages = [{"role": "user", "content": prompt}]
+
+    body = json.dumps({
+        "model": args.model, "messages": messages,
+        "temperature": args.temperature, "max_tokens": args.max_tokens,
+    }).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {auth}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        r = json.loads(resp.read())
+
+    answer = r["choices"][0]["message"]["content"]
+    if args.context and answer.startswith("```"):
+        answer = answer.split("\n", 1)[1].rsplit("```", 1)[0]
+
+    if args.target:
+        Path(args.target).expanduser().write_text(answer)
+        print(f"wrote {args.target} ({len(answer)}c)", file=sys.stderr)
+    else:
+        print(answer)
+
+    u = r.get("usage", {})
+    cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+    print(f"[{args.model}: {u.get('prompt_tokens', '?')} in ({cached} cached) / "
+          f"{u.get('completion_tokens', '?')} out]", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
