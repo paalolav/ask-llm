@@ -113,6 +113,7 @@ def main():
     body = json.dumps({
         "model": args.model, "messages": messages,
         "temperature": args.temperature, "max_tokens": args.max_tokens,
+        "user": "ask-llm",
     }).encode()
     req = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json", "Authorization": f"Bearer {auth}"})
