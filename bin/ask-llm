@@ -135,6 +135,13 @@ def main():
     print(f"[{args.model}: {u.get('prompt_tokens', '?')} in ({cached} cached) / "
           f"{u.get('completion_tokens', '?')} out]", file=sys.stderr)
 
+    log_dir = Path("~/.local/share/ask-llm").expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime
+    with open(log_dir / "usage.log", "a") as lf:
+        lf.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}\t{args.model}\t"
+                 f"{u.get('prompt_tokens', 0)}\t{u.get('completion_tokens', 0)}\n")
+
 
 if __name__ == "__main__":
     main()
