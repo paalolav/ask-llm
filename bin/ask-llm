@@ -69,17 +69,12 @@ def run_stats(argv):
     args = p.parse_args(argv)
 
     base_url = os.environ.get("ASK_LLM_URL", "")
-    api_key = os.environ.get("ASK_LLM_API_KEY", "").strip()
-
-    if args.all:
-        api_key = os.environ.get("LITELLM_MASTER_KEY", "").strip()
-        if not api_key:
-            print("--all requires LITELLM_MASTER_KEY env var (not stored in config).")
-            print("Usage: LITELLM_MASTER_KEY=sk-... ask-llm stats --all")
-            sys.exit(1)
+    # /spend/logs requires admin (master key) — virtual keys get 401
+    api_key = os.environ.get("LITELLM_MASTER_KEY", "").strip()
 
     if not api_key:
-        print("ask-llm stats requires ASK_LLM_API_KEY in ~/.config/ask-llm.env")
+        print("ask-llm stats requires LITELLM_MASTER_KEY in ~/.config/ask-llm.env")
+        print("(The /spend/logs endpoint requires admin access.)")
         sys.exit(1)
 
     if not base_url:
@@ -87,16 +82,9 @@ def run_stats(argv):
         sys.exit(1)
 
     litellm_base = base_url.replace("/v1/chat/completions", "").rstrip("/")
+    cutoff = (datetime.now() - timedelta(days=args.days)).isoformat()
 
-    end = datetime.now()
-    start = end - timedelta(days=args.days)
-    start_str = start.strftime("%Y-%m-%d")
-    end_str = end.strftime("%Y-%m-%d")
-
-    url = f"{litellm_base}/spend/logs?user_id=ask-llm&start_date={start_str}&end_date={end_str}"
-    if args.all:
-        url = f"{litellm_base}/spend/logs?start_date={start_str}&end_date={end_str}"
-
+    url = f"{litellm_base}/spend/logs"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}",
     })
@@ -110,6 +98,9 @@ def run_stats(argv):
 
     if not isinstance(logs, list):
         logs = []
+    logs = [e for e in logs if e.get("startTime", "") >= cutoff]
+    if not args.all:
+        logs = [e for e in logs if e.get("user") == "ask-llm"]
 
     total_req = len(logs)
     total_in = sum(e.get("prompt_tokens", 0) for e in logs)

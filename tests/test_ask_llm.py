@@ -293,7 +293,7 @@ class StatsTests(unittest.TestCase):
         env = {
             "ASK_LLM_URL": "http://fake:4000/v1/chat/completions",
             "ASK_LLM_MODEL": "test-model",
-            "ASK_LLM_API_KEY": "sk-test-key",
+            "LITELLM_MASTER_KEY": "sk-master-test",
             **(env_overrides or {}),
         }
         argv = ["ask-llm", "stats"] + (extra_args or [])
@@ -332,9 +332,9 @@ class StatsTests(unittest.TestCase):
         self.assertEqual(data["total_requests"], 3)
         self.assertIn("qwen3.6-35b", data["by_model"])
 
-    def test_stats_no_api_key(self):
-        output = self._run_stats(env_overrides={"ASK_LLM_API_KEY": ""})
-        self.assertIn("ASK_LLM_API_KEY", output)
+    def test_stats_no_master_key(self):
+        output = self._run_stats(env_overrides={"LITELLM_MASTER_KEY": ""})
+        self.assertIn("LITELLM_MASTER_KEY", output)
 
 
 if __name__ == "__main__":
