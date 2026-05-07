@@ -77,6 +77,64 @@ python3 -m unittest discover tests -v
 
 Tests mock the network and do not require a running LLM endpoint.
 
+## LiteLLM Spend Tracking
+
+If your LiteLLM proxy has a PostgreSQL database connected, ask-llm can track
+per-request usage via virtual keys.
+
+### Setup
+
+1. Configure LiteLLM with `database_url` and `master_key` in your proxy config
+2. Generate a virtual key:
+   ```bash
+   curl -s http://<litellm-host>:4000/key/generate \
+     -H "Authorization: Bearer <master-key>" \
+     -H "Content-Type: application/json" \
+     -d '{"key_alias": "ask-llm", "user_id": "ask-llm"}'
+   ```
+3. Add the returned key to your config:
+   ```
+   ASK_LLM_API_KEY=sk-<returned-key>
+   ```
+
+Without `ASK_LLM_API_KEY`, ask-llm falls back to `ASK_LLM_AUTH` (default: `dummy`).
+Inference works either way — only spend tracking requires a virtual key.
+
+## Stats
+
+```bash
+ask-llm stats              # Usage summary, last 7 days
+ask-llm stats --days 30    # Last 30 days
+ask-llm stats --by-model   # Grouped by model
+ask-llm stats --raw        # Raw JSON
+```
+
+Cross-consumer stats (requires admin access):
+```bash
+LITELLM_MASTER_KEY=sk-... ask-llm stats --all
+```
+
+## Claude Code Integration
+
+### Block Haiku subagents
+
+`examples/hooks/block-haiku-subagent.sh` blocks Claude Code from spawning
+Haiku subagents, encouraging use of ask-llm with a local model instead.
+
+Install in Claude Code `settings.json`:
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [{"type": "command", "command": "bash /path/to/block-haiku-subagent.sh", "timeout": 5}]
+      }
+    ]
+  }
+}
+```
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
