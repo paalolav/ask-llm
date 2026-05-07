@@ -238,5 +238,44 @@ class CLIIntegrationTests(unittest.TestCase):
                 ask_llm.main()
 
 
+class AuthHeaderTests(unittest.TestCase):
+    """Verify ASK_LLM_API_KEY takes precedence over ASK_LLM_AUTH."""
+
+    def _run_with_env(self, env_overrides):
+        """Run main() with mocked env + network, return the Authorization header sent."""
+        env = {
+            "ASK_LLM_URL": "http://fake:4000/v1/chat/completions",
+            "ASK_LLM_MODEL": "test-model",
+            "ASK_LLM_AUTH": "dummy",
+            **env_overrides,
+        }
+
+        captured = {}
+        def fake_urlopen(req, timeout):
+            captured["auth"] = req.get_header("Authorization")
+            return _fake_response("ok")
+
+        with mock.patch.dict(os.environ, env, clear=False), \
+             mock.patch("sys.argv", ["ask-llm", "test"]), \
+             mock.patch.object(ask_llm.urllib.request, "urlopen", fake_urlopen), \
+             mock.patch("sys.stdout", io.StringIO()), \
+             mock.patch("sys.stderr", io.StringIO()), \
+             mock.patch.object(ask_llm, "CONFIG_FILE", Path("/nonexistent")):
+            ask_llm.main()
+        return captured.get("auth")
+
+    def test_api_key_takes_precedence(self):
+        auth = self._run_with_env({"ASK_LLM_API_KEY": "sk-test-key-123"})
+        self.assertEqual(auth, "Bearer sk-test-key-123")
+
+    def test_falls_back_to_auth(self):
+        auth = self._run_with_env({})
+        self.assertEqual(auth, "Bearer dummy")
+
+    def test_api_key_empty_falls_back(self):
+        auth = self._run_with_env({"ASK_LLM_API_KEY": ""})
+        self.assertEqual(auth, "Bearer dummy")
+
+
 if __name__ == "__main__":
     unittest.main()

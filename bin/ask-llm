@@ -4,7 +4,8 @@
 Config is loaded from ~/.config/ask-llm.env (KEY=VALUE), overridable by env:
   ASK_LLM_URL      OpenAI-compatible /v1/chat/completions endpoint
   ASK_LLM_MODEL    Model alias (e.g. qwen3.6-35b)
-  ASK_LLM_AUTH     Bearer token (LiteLLM accepts "dummy" by default)
+  ASK_LLM_API_KEY  Virtual key for LiteLLM spend tracking (preferred)
+  ASK_LLM_AUTH     Bearer token fallback (LiteLLM accepts "dummy" by default)
   ASK_LLM_TIMEOUT  Seconds, default 180
 
 Usage:
@@ -59,7 +60,8 @@ def safe_read(path_str):
 def main():
     load_config()
     url = os.environ.get("ASK_LLM_URL")
-    auth = os.environ.get("ASK_LLM_AUTH", "dummy")
+    api_key = os.environ.get("ASK_LLM_API_KEY", "").strip()
+    auth = api_key if api_key else os.environ.get("ASK_LLM_AUTH", "dummy")
     default_model = os.environ.get("ASK_LLM_MODEL")
     timeout = int(os.environ.get("ASK_LLM_TIMEOUT", "180"))
     if not url or not default_model:
