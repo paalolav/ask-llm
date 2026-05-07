@@ -277,5 +277,65 @@ class AuthHeaderTests(unittest.TestCase):
         self.assertEqual(auth, "Bearer dummy")
 
 
+class StatsTests(unittest.TestCase):
+    """Tests for ask-llm stats subcommand."""
+
+    SAMPLE_SPEND_LOGS = json.dumps([
+        {"startTime": "2026-05-06T10:00:00Z", "model": "qwen3.6-35b",
+         "prompt_tokens": 500, "completion_tokens": 200, "total_tokens": 700, "user": "ask-llm"},
+        {"startTime": "2026-05-06T11:00:00Z", "model": "gemma-4",
+         "prompt_tokens": 300, "completion_tokens": 100, "total_tokens": 400, "user": "ask-llm"},
+        {"startTime": "2026-05-05T09:00:00Z", "model": "qwen3.6-35b",
+         "prompt_tokens": 600, "completion_tokens": 250, "total_tokens": 850, "user": "ask-llm"},
+    ]).encode()
+
+    def _run_stats(self, extra_args=None, env_overrides=None, response_data=None):
+        env = {
+            "ASK_LLM_URL": "http://fake:4000/v1/chat/completions",
+            "ASK_LLM_MODEL": "test-model",
+            "ASK_LLM_API_KEY": "sk-test-key",
+            **(env_overrides or {}),
+        }
+        argv = ["ask-llm", "stats"] + (extra_args or [])
+        resp_data = response_data or self.SAMPLE_SPEND_LOGS
+
+        class FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return resp_data
+
+        with mock.patch.dict(os.environ, env, clear=False), \
+             mock.patch("sys.argv", argv), \
+             mock.patch.object(ask_llm.urllib.request, "urlopen", return_value=FakeResp()), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+             mock.patch("sys.stderr", new_callable=io.StringIO), \
+             mock.patch.object(ask_llm, "CONFIG_FILE", Path("/nonexistent")):
+            try:
+                ask_llm.main()
+            except SystemExit:
+                pass
+            return out.getvalue()
+
+    def test_stats_default(self):
+        output = self._run_stats()
+        self.assertIn("Requests:", output)
+        self.assertIn("3", output)
+
+    def test_stats_by_model(self):
+        output = self._run_stats(["--by-model"])
+        self.assertIn("qwen3.6-35b", output)
+        self.assertIn("gemma-4", output)
+
+    def test_stats_raw(self):
+        output = self._run_stats(["--raw"])
+        data = json.loads(output)
+        self.assertEqual(data["total_requests"], 3)
+        self.assertIn("qwen3.6-35b", data["by_model"])
+
+    def test_stats_no_api_key(self):
+        output = self._run_stats(env_overrides={"ASK_LLM_API_KEY": ""})
+        self.assertIn("ASK_LLM_API_KEY", output)
+
+
 if __name__ == "__main__":
     unittest.main()

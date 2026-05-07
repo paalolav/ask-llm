@@ -57,8 +57,112 @@ def safe_read(path_str):
     return p, p.read_text(errors="replace")
 
 
+def run_stats(argv):
+    import argparse as ap
+    from datetime import datetime, timedelta
+
+    p = ap.ArgumentParser(prog="ask-llm stats", description="LiteLLM usage stats")
+    p.add_argument("--days", type=int, default=7, help="Days to look back (default 7)")
+    p.add_argument("--by-model", action="store_true", help="Group by model")
+    p.add_argument("--raw", action="store_true", help="Raw JSON output")
+    p.add_argument("--all", action="store_true", help="All consumers (needs LITELLM_MASTER_KEY env)")
+    args = p.parse_args(argv)
+
+    base_url = os.environ.get("ASK_LLM_URL", "")
+    api_key = os.environ.get("ASK_LLM_API_KEY", "").strip()
+
+    if args.all:
+        api_key = os.environ.get("LITELLM_MASTER_KEY", "").strip()
+        if not api_key:
+            print("--all requires LITELLM_MASTER_KEY env var (not stored in config).")
+            print("Usage: LITELLM_MASTER_KEY=sk-... ask-llm stats --all")
+            sys.exit(1)
+
+    if not api_key:
+        print("ask-llm stats requires ASK_LLM_API_KEY in ~/.config/ask-llm.env")
+        sys.exit(1)
+
+    if not base_url:
+        print("ASK_LLM_URL not set")
+        sys.exit(1)
+
+    litellm_base = base_url.replace("/v1/chat/completions", "").rstrip("/")
+
+    end = datetime.now()
+    start = end - timedelta(days=args.days)
+    start_str = start.strftime("%Y-%m-%d")
+    end_str = end.strftime("%Y-%m-%d")
+
+    url = f"{litellm_base}/spend/logs?user_id=ask-llm&start_date={start_str}&end_date={end_str}"
+    if args.all:
+        url = f"{litellm_base}/spend/logs?start_date={start_str}&end_date={end_str}"
+
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {api_key}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            logs = json.loads(resp.read())
+    except Exception as e:
+        print(f"Failed to fetch spend logs: {e}")
+        print("Check that LiteLLM has a database connected.")
+        sys.exit(1)
+
+    if not isinstance(logs, list):
+        logs = []
+
+    total_req = len(logs)
+    total_in = sum(e.get("prompt_tokens", 0) for e in logs)
+    total_out = sum(e.get("completion_tokens", 0) for e in logs)
+
+    by_model = {}
+    for e in logs:
+        m = e.get("model", "unknown")
+        if m not in by_model:
+            by_model[m] = {"requests": 0, "tokens_in": 0, "tokens_out": 0}
+        by_model[m]["requests"] += 1
+        by_model[m]["tokens_in"] += e.get("prompt_tokens", 0)
+        by_model[m]["tokens_out"] += e.get("completion_tokens", 0)
+
+    if args.raw:
+        print(json.dumps({
+            "days": args.days, "total_requests": total_req,
+            "total_tokens_in": total_in, "total_tokens_out": total_out,
+            "by_model": by_model,
+        }, indent=2))
+        return
+
+    label = "all consumers" if args.all else "ask-llm"
+    print(f"LiteLLM spend ({label}, last {args.days} days)")
+    print("-" * 40)
+    print(f"{'Requests:':<14}{total_req:>10,}")
+    print(f"{'Tokens in:':<14}{total_in:>10,}")
+    print(f"{'Tokens out:':<14}{total_out:>10,}")
+
+    if by_model:
+        print(f"\nBy model:")
+        for m, d in sorted(by_model.items(), key=lambda x: -x[1]["requests"]):
+            print(f"  {m:<20}{d['requests']:>5} req  {d['tokens_in']:>8,} in  {d['tokens_out']:>8,} out")
+
+    if args.all:
+        by_user = {}
+        for e in logs:
+            u = e.get("user", "unknown")
+            if u not in by_user:
+                by_user[u] = 0
+            by_user[u] += 1
+        if by_user:
+            print(f"\nBy consumer:")
+            for u, c in sorted(by_user.items(), key=lambda x: -x[1]):
+                print(f"  {u:<20}{c:>5} req")
+
+
 def main():
     load_config()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "stats":
+        return run_stats(sys.argv[2:])
+
     url = os.environ.get("ASK_LLM_URL")
     api_key = os.environ.get("ASK_LLM_API_KEY", "").strip()
     auth = api_key if api_key else os.environ.get("ASK_LLM_AUTH", "dummy")
