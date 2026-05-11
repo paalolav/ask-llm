@@ -53,26 +53,9 @@ models:
       max_tokens: 4096
     cost: free
 
-  qwen-coder-next:
-    type: local
-    backend: exo (mac1+mac2, MLX 4bit)
-    # Qwen3-Coder-Next: MoE coding specialist
-    # Recommended sampling: temperature=1.0, top_p=0.95, top_k=40
-    # Source: https://huggingface.co/Qwen/Qwen3-Coder-Next
-    context_k: 262
-    speed: fast
-    strengths:
-      - Code generation, refactoring, debugging
-      - Agentic coding tasks and tool use
-      - Idiomatic, type-safe output
-    recommended:
-      # For thinking/code mode: temp=0.6 (precise), temp=1.0 (general)
-      # Source: https://huggingface.co/Qwen/Qwen3-Coder-Next
-      temperature: 0.6
-      top_p: 0.95
-      top_k: 40
-      max_tokens: 8192
-    cost: free
+  # qwen-coder-next: REMOVED 2026-05-11 — model downloaded (44.86 GB) on both exo nodes
+  # but cannot be placed without unloading Qwen3.6-35B + Gemma-4 (24 GB free vs 44.86 GB
+  # required). Re-add when a 3rd exo node is online or when pool-load capacity changes.
 
   qwen3.5-4b:
     type: local
@@ -155,11 +138,11 @@ models:
 # Override model with --model X, override temperature with --temperature X.
 tasks:
   code:
-    model: qwen-coder-next
-    # Precise code gen: thinking mode with low temp for deterministic output
-    # Source: https://huggingface.co/Qwen/Qwen3-Coder-Next (thinking mode + precise coding: temp=0.6)
-    temperature: 0.6
-    max_tokens: 8192
+    # Routed to qwen3.6-27b (dense, flagship coding) since qwen-coder-next is capacity-bound.
+    # Source: https://qwen.ai/blog?id=qwen3.6-27b
+    model: qwen3.6-27b
+    temperature: 0.7
+    max_tokens: 4096
     system: "Precise code generation. Idiomatic, type-safe, minimal comments. Output ONLY code unless asked otherwise."
 
   reasoning:
