@@ -146,16 +146,15 @@ tasks:
     system: "Precise code generation. Idiomatic, type-safe, minimal comments. Output ONLY code unless asked otherwise."
 
   reasoning:
-    model: qwen3.6-35b
-    # Reasoning tasks: standard non-thinking instruct at 0.7
-    # Source: https://huggingface.co/Qwen/Qwen3.6-35B-A3B (Instruct mode)
+    model: qwen3.6-27b
+    # Reasoning tasks: 27B dense gir vesentleg betre kvalitet enn 35B MoE per brukar-evaluering 2026-05-13
     temperature: 0.7
     max_tokens: 4096
     system: "Step-by-step reasoning. Explicit assumptions. Mark uncertainties clearly."
 
   chat:
-    model: qwen3.6-35b
-    # Conversational: slightly above instruct default for natural flow
+    model: qwen3.6-27b
+    # Conversational: 27B dense gir betre kvalitet enn 35B MoE
     temperature: 0.7
     max_tokens: 2048
 
