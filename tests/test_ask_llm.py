@@ -466,6 +466,39 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(saved["messages"][-1],
                          {"role": "assistant", "content": "A2"})
 
+    def test_cache_truncates_long_history(self):
+        """Cache caps at MAX_CACHED_MESSAGES so long -c chains don't blow context."""
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        # 30 messages, alternating user/assistant
+        msgs = [{"role": "user" if i % 2 == 0 else "assistant",
+                 "content": f"m{i}"} for i in range(30)]
+        self.cache.write_text(json.dumps({"model": "x", "messages": msgs}))
+        self._run(["-c", "next"], response="reply")
+        saved = json.loads(self.cache.read_text())
+        # 30 (prior) + 1 (new user) + 1 (assistant reply) would be 32 without
+        # truncation. We cap at MAX_CACHED_MESSAGES.
+        cap = ask_llm.MAX_CACHED_MESSAGES
+        self.assertLessEqual(len(saved["messages"]), cap)
+        # Last two should be the new exchange.
+        self.assertEqual(saved["messages"][-2]["content"], "next")
+        self.assertEqual(saved["messages"][-1]["content"], "reply")
+
+    def test_cache_truncation_preserves_system_prefix(self):
+        """If conversation starts with a system message (e.g., from --task on
+        the original call), keep it across truncation."""
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        msgs = [{"role": "system", "content": "you are a precise assistant"}]
+        for i in range(30):
+            msgs.append({"role": "user" if i % 2 == 0 else "assistant",
+                         "content": f"m{i}"})
+        self.cache.write_text(json.dumps({"model": "x", "messages": msgs}))
+        self._run(["-c", "next"], response="reply")
+        saved = json.loads(self.cache.read_text())
+        cap = ask_llm.MAX_CACHED_MESSAGES
+        self.assertLessEqual(len(saved["messages"]), cap)
+        self.assertEqual(saved["messages"][0]["role"], "system")
+        self.assertIn("precise assistant", saved["messages"][0]["content"])
+
     def test_continue_rejects_paths(self):
         self.cache.parent.mkdir(parents=True, exist_ok=True)
         self.cache.write_text(json.dumps({

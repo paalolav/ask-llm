@@ -85,6 +85,11 @@ ask-llm -c "now show how to detect it"
 `-c` reuses the prior model unless you pass `--model`. It cannot be combined
 with `--paths`, `--context`, or `--task` (start a fresh conversation for those).
 
+The cache (`~/.cache/ask-llm/last.json`, mode 0600) stores prompts and replies
+in plaintext. Conversation length is capped at 20 messages (≈10 turns) so
+long `-c` chains don't exceed context windows. Run `rm ~/.cache/ask-llm/last.json`
+to clear if a prompt contained secrets you don't want lingering on disk.
+
 `-q`/`--question` is required when using `--paths`, because argparse is
 greedy and would otherwise consume the prompt into the paths list.
 

@@ -28,6 +28,7 @@ from pathlib import Path
 CONFIG_FILE = Path("~/.config/ask-llm.env").expanduser()
 MODELS_FILE = Path(__file__).resolve().parent / "models.yaml"
 CACHE_FILE = Path("~/.cache/ask-llm/last.json").expanduser()
+MAX_CACHED_MESSAGES = 20  # ~10 user/assistant pairs; keeps -c chains bounded
 
 
 def load_last_messages():
@@ -43,14 +44,35 @@ def load_last_messages():
     return None
 
 
+def _truncate_messages(messages, cap=MAX_CACHED_MESSAGES):
+    """Cap conversation length, preserving any leading system messages."""
+    if len(messages) <= cap:
+        return messages
+    system_prefix = []
+    for m in messages:
+        if m.get("role") == "system":
+            system_prefix.append(m)
+        else:
+            break
+    keep = cap - len(system_prefix)
+    if keep <= 0:
+        return system_prefix[:cap]
+    return system_prefix + messages[len(system_prefix):][-keep:]
+
+
 def save_last_messages(messages, assistant_content, model):
-    """Persist messages + assistant reply for next ask-llm -c invocation."""
+    """Persist messages + assistant reply for next ask-llm -c invocation.
+
+    NOTE: cache stores prompts and replies in plaintext (chmod 600). Delete
+    ~/.cache/ask-llm/last.json if your prompt contained secrets.
+    """
     try:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        full = list(messages) + [
+            {"role": "assistant", "content": assistant_content}]
         payload = {
             "model": model,
-            "messages": list(messages) + [
-                {"role": "assistant", "content": assistant_content}],
+            "messages": _truncate_messages(full),
         }
         CACHE_FILE.write_text(json.dumps(payload))
         try:
