@@ -1,13 +1,12 @@
 """Tests for ask-llm. Run: python3 -m unittest discover tests -v
 
-Loads bin/ask-llm via importlib (the script has no .py extension).
-Network calls are mocked — no LiteLLM required.
+Imports the ask_llm package from the repo root. Network calls are mocked —
+no LiteLLM required.
 """
-import importlib.machinery
-import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,13 +14,8 @@ from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
-SCRIPT = HERE.parent / "bin" / "ask-llm"
-
-# bin/ask-llm has no .py extension — load explicitly via SourceFileLoader.
-_loader = importlib.machinery.SourceFileLoader("ask_llm", str(SCRIPT))
-_spec = importlib.util.spec_from_loader("ask_llm", _loader)
-ask_llm = importlib.util.module_from_spec(_spec)
-_loader.exec_module(ask_llm)
+sys.path.insert(0, str(HERE.parent))
+import ask_llm  # noqa: E402
 
 
 class SafeReadTests(unittest.TestCase):
@@ -280,14 +274,23 @@ class AuthHeaderTests(unittest.TestCase):
 class StatsTests(unittest.TestCase):
     """Tests for ask-llm stats subcommand."""
 
-    SAMPLE_SPEND_LOGS = json.dumps([
-        {"startTime": "2026-05-06T10:00:00Z", "model": "qwen3.6-35b",
-         "prompt_tokens": 500, "completion_tokens": 200, "total_tokens": 700, "user": "ask-llm"},
-        {"startTime": "2026-05-06T11:00:00Z", "model": "gemma-4",
-         "prompt_tokens": 300, "completion_tokens": 100, "total_tokens": 400, "user": "ask-llm"},
-        {"startTime": "2026-05-05T09:00:00Z", "model": "qwen3.6-35b",
-         "prompt_tokens": 600, "completion_tokens": 250, "total_tokens": 850, "user": "ask-llm"},
-    ]).encode()
+    @classmethod
+    def setUpClass(cls):
+        from datetime import datetime, timedelta
+        # Use today/yesterday so the 7-day default filter does not age out.
+        d0 = datetime.utcnow().isoformat() + "Z"
+        d1 = (datetime.utcnow() - timedelta(days=1)).isoformat() + "Z"
+        cls.SAMPLE_SPEND_LOGS = json.dumps([
+            {"startTime": d0, "model": "qwen3.6-35b",
+             "prompt_tokens": 500, "completion_tokens": 200,
+             "total_tokens": 700, "user": "ask-llm"},
+            {"startTime": d0, "model": "gemma-4",
+             "prompt_tokens": 300, "completion_tokens": 100,
+             "total_tokens": 400, "user": "ask-llm"},
+            {"startTime": d1, "model": "qwen3.6-35b",
+             "prompt_tokens": 600, "completion_tokens": 250,
+             "total_tokens": 850, "user": "ask-llm"},
+        ]).encode()
 
     def _run_stats(self, extra_args=None, env_overrides=None, response_data=None):
         env = {
@@ -335,6 +338,149 @@ class StatsTests(unittest.TestCase):
     def test_stats_no_master_key(self):
         output = self._run_stats(env_overrides={"LITELLM_MASTER_KEY": ""})
         self.assertIn("LITELLM_MASTER_KEY", output)
+
+    def test_stats_non_litellm_endpoint_degrades(self):
+        """If ASK_LLM_URL points at a non-LiteLLM endpoint, /spend/logs returns
+        404 or HTML — should print a friendly message, not a traceback."""
+        import urllib.error
+        env = {
+            "ASK_LLM_URL": "http://ollama:11434/v1/chat/completions",
+            "ASK_LLM_MODEL": "test-model",
+            "LITELLM_MASTER_KEY": "sk-master-test",
+        }
+
+        def fake_urlopen(req, timeout):
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", {}, io.BytesIO(b"Not Found"))
+
+        with mock.patch.dict(os.environ, env, clear=False), \
+             mock.patch("sys.argv", ["ask-llm", "stats"]), \
+             mock.patch.object(ask_llm.urllib.request, "urlopen", fake_urlopen), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as out, \
+             mock.patch("sys.stderr", new_callable=io.StringIO), \
+             mock.patch.object(ask_llm, "CONFIG_FILE", Path("/nonexistent")):
+            try:
+                ask_llm.main()
+            except SystemExit:
+                pass
+            output = out.getvalue()
+        self.assertIn("LiteLLM", output)
+        self.assertNotIn("Traceback", output)
+
+
+class ContinuationTests(unittest.TestCase):
+    """Tests for -c/--continue flag (chat continuation via local cache file)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cache = self.tmp / "last.json"
+        self.env = {
+            "ASK_LLM_URL": "http://test/v1/chat/completions",
+            "ASK_LLM_MODEL": "default-model",
+            "ASK_LLM_AUTH": "test-token",
+        }
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, argv, response="reply", capture=None):
+        if capture is None:
+            capture = {}
+
+        def fake_urlopen(req, timeout):
+            capture["url"] = req.full_url
+            capture["body"] = json.loads(req.data)
+            return _fake_response(response)
+
+        with mock.patch.dict(os.environ, self.env, clear=False), \
+             mock.patch("sys.argv", ["ask-llm"] + argv), \
+             mock.patch.object(ask_llm.urllib.request, "urlopen", fake_urlopen), \
+             mock.patch("sys.stdout", io.StringIO()), \
+             mock.patch("sys.stderr", io.StringIO()), \
+             mock.patch.object(ask_llm, "CONFIG_FILE", self.tmp / "nonexistent.env"), \
+             mock.patch.object(ask_llm, "CACHE_FILE", self.cache):
+            ask_llm.main()
+        return capture
+
+    def test_normal_call_saves_cache(self):
+        self._run(["hei"], response="hallo")
+        self.assertTrue(self.cache.exists())
+        saved = json.loads(self.cache.read_text())
+        roles = [m["role"] for m in saved["messages"]]
+        self.assertIn("user", roles)
+        self.assertIn("assistant", roles)
+        self.assertEqual(saved["messages"][-1]["content"], "hallo")
+        self.assertEqual(saved["model"], "default-model")
+
+    def test_continue_appends_to_cached_messages(self):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(json.dumps({
+            "model": "qwen3.5-4b",
+            "messages": [
+                {"role": "user", "content": "Q1"},
+                {"role": "assistant", "content": "A1"},
+            ],
+        }))
+        cap = self._run(["-c", "Q2"], response="A2")
+        msgs = cap["body"]["messages"]
+        self.assertEqual(len(msgs), 3)
+        self.assertEqual(msgs[0], {"role": "user", "content": "Q1"})
+        self.assertEqual(msgs[1], {"role": "assistant", "content": "A1"})
+        self.assertEqual(msgs[2], {"role": "user", "content": "Q2"})
+        # Model should default to the cached one when --model not given
+        self.assertEqual(cap["body"]["model"], "qwen3.5-4b")
+
+    def test_continue_explicit_model_overrides_cached(self):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(json.dumps({
+            "model": "qwen3.5-4b",
+            "messages": [{"role": "user", "content": "x"},
+                         {"role": "assistant", "content": "y"}],
+        }))
+        cap = self._run(["-c", "--model", "gemma-4", "next"])
+        self.assertEqual(cap["body"]["model"], "gemma-4")
+
+    def test_continue_without_cache_errors(self):
+        with mock.patch.dict(os.environ, self.env, clear=False), \
+             mock.patch("sys.argv", ["ask-llm", "-c", "follow"]), \
+             mock.patch("sys.stdout", io.StringIO()) as out, \
+             mock.patch("sys.stderr", io.StringIO()) as err, \
+             mock.patch.object(ask_llm, "CONFIG_FILE", self.tmp / "nonexistent.env"), \
+             mock.patch.object(ask_llm, "CACHE_FILE", self.cache):
+            with self.assertRaises(SystemExit):
+                ask_llm.main()
+            combined = out.getvalue() + err.getvalue()
+        self.assertIn("previous", combined.lower())
+
+    def test_continue_appends_assistant_reply_to_cache(self):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(json.dumps({
+            "model": "qwen3.5-4b",
+            "messages": [{"role": "user", "content": "Q1"},
+                         {"role": "assistant", "content": "A1"}],
+        }))
+        self._run(["-c", "Q2"], response="A2")
+        saved = json.loads(self.cache.read_text())
+        self.assertEqual(len(saved["messages"]), 4)
+        self.assertEqual(saved["messages"][-1],
+                         {"role": "assistant", "content": "A2"})
+
+    def test_continue_rejects_paths(self):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(json.dumps({
+            "model": "x", "messages": [{"role": "user", "content": "x"}]}))
+        f = self.tmp / "a.py"
+        f.write_text("x")
+        with mock.patch.dict(os.environ, self.env, clear=False), \
+             mock.patch("sys.argv", ["ask-llm", "-c", "next", "--paths", str(f)]), \
+             mock.patch("sys.stdout", io.StringIO()), \
+             mock.patch("sys.stderr", io.StringIO()) as err, \
+             mock.patch.object(ask_llm, "CONFIG_FILE", self.tmp / "nonexistent.env"), \
+             mock.patch.object(ask_llm, "CACHE_FILE", self.cache):
+            with self.assertRaises(SystemExit):
+                ask_llm.main()
+            self.assertIn("--paths", err.getvalue() + "")
 
 
 if __name__ == "__main__":

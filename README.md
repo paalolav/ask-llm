@@ -1,7 +1,9 @@
 # ask-llm
 
 A small command-line client for OpenAI-compatible chat/completions APIs.
-Stdlib-only Python (no pip dependencies), provider-agnostic via env config.
+Provider-agnostic via env config (LiteLLM, Ollama, llama.cpp, mlx-lm, exo,
+vLLM, OpenAI/Anthropic/DeepSeek). Single dependency: PyYAML for the model
+catalog.
 
 ## What it does
 
@@ -14,17 +16,22 @@ Stdlib-only Python (no pip dependencies), provider-agnostic via env config.
 
 ## Installation
 
+Pick one:
+
 ```bash
-git clone <repo> ask-llm
+# pipx (recommended for daily use; isolates dependencies)
+pipx install git+https://github.com/paalolav/ask-llm
+
+# or: clone + symlink (good for local hacking)
+git clone https://github.com/paalolav/ask-llm
 cd ask-llm
 ./setup.sh
 ```
 
-`setup.sh`:
-- Symlinks `bin/ask-llm` into `~/bin/` (or `~/.local/bin/` if `~/bin` isn't on PATH)
-- Copies `.env.example` to `~/.config/ask-llm.env` if it doesn't exist
+`setup.sh` symlinks `bin/ask-llm` into `~/bin/` (or `~/.local/bin/`). Both
+install methods provide the same `ask-llm` command.
 
-Then fill in `~/.config/ask-llm.env` with your values:
+Then create `~/.config/ask-llm.env`:
 
 ```bash
 ASK_LLM_URL=http://localhost:4000/v1/chat/completions
@@ -32,7 +39,23 @@ ASK_LLM_MODEL=your-model-id
 ASK_LLM_AUTH=dummy
 ```
 
-Environment variables of the same name override the config file.
+Examples for non-LiteLLM endpoints:
+
+```bash
+# Ollama
+ASK_LLM_URL=http://localhost:11434/v1/chat/completions
+ASK_LLM_MODEL=llama3.1:8b
+ASK_LLM_AUTH=dummy
+
+# OpenAI
+ASK_LLM_URL=https://api.openai.com/v1/chat/completions
+ASK_LLM_MODEL=gpt-4o-mini
+ASK_LLM_AUTH=sk-...
+```
+
+Environment variables of the same name override the config file. macOS users
+can store `ASK_LLM_AUTH` in Keychain via `setup-keychain.sh` to avoid
+plaintext on disk.
 
 ## Usage
 
@@ -52,7 +75,15 @@ ask-llm -q "pytest test for the auth flow" \
 
 # Override the model on the fly
 ask-llm --model gpt-4o-mini "..."
+
+# Continue the previous conversation (cached in ~/.cache/ask-llm/last.json)
+ask-llm "what causes a deadlock?"
+ask-llm -c "give me an example in Python"
+ask-llm -c "now show how to detect it"
 ```
+
+`-c` reuses the prior model unless you pass `--model`. It cannot be combined
+with `--paths`, `--context`, or `--task` (start a fresh conversation for those).
 
 `-q`/`--question` is required when using `--paths`, because argparse is
 greedy and would otherwise consume the prompt into the paths list.
@@ -100,7 +131,7 @@ per-request usage via virtual keys.
 Without `ASK_LLM_API_KEY`, ask-llm falls back to `ASK_LLM_AUTH` (default: `dummy`).
 Inference works either way — only spend tracking requires a virtual key.
 
-## Stats
+## Stats (LiteLLM only)
 
 ```bash
 ask-llm stats              # Usage summary, last 7 days
@@ -113,6 +144,10 @@ Cross-consumer stats (requires admin access):
 ```bash
 LITELLM_MASTER_KEY=sk-... ask-llm stats --all
 ```
+
+Stats reads `/spend/logs` on the configured endpoint. Against Ollama,
+llama.cpp, OpenAI, etc., it prints a friendly notice and exits — they don't
+have that endpoint.
 
 ## Claude Code Integration
 
