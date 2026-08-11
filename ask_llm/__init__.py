@@ -112,12 +112,103 @@ def load_models():
     """Load model catalog from models.yaml. Returns empty dict if unavailable."""
     if not MODELS_FILE.is_file():
         return {"models": {}, "tasks": {}}
+    text = MODELS_FILE.read_text()
     try:
         import yaml
-        return yaml.safe_load(MODELS_FILE.read_text()) or {"models": {}, "tasks": {}}
+        return yaml.safe_load(text) or {"models": {}, "tasks": {}}
     except ImportError:
-        # pyyaml not installed — graceful fallback
-        return {"models": {}, "tasks": {}}
+        return load_models_without_yaml(text)
+
+
+def parse_scalar(value):
+    """Parse the scalar subset used by models.yaml."""
+    value = value.strip()
+    if value in ("", "null", "None"):
+        return None
+    if value in ("true", "True"):
+        return True
+    if value in ("false", "False"):
+        return False
+    try:
+        if "." not in value:
+            return int(value)
+        return float(value)
+    except ValueError:
+        return value.strip('"').strip("'")
+
+
+def load_models_without_yaml(text):
+    """Small fallback parser for ask-llm's bundled model catalog.
+
+    This is not a general YAML parser. It handles the catalog fields needed for
+    alias resolution, --list output, and task presets when PyYAML is absent.
+    """
+    catalog = {"models": {}, "tasks": {}}
+    section = None
+    current_name = None
+    current_map = None
+    current_list_key = None
+    in_recommended = False
+
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1]
+            current_name = None
+            current_map = None
+            current_list_key = None
+            in_recommended = False
+            continue
+
+        if section not in catalog:
+            continue
+
+        if indent == 2 and stripped.endswith(":"):
+            current_name = stripped[:-1]
+            current_map = {}
+            catalog[section][current_name] = current_map
+            current_list_key = None
+            in_recommended = False
+            continue
+
+        if current_map is None:
+            continue
+
+        if indent == 4 and stripped.endswith(":"):
+            key = stripped[:-1]
+            if key in ("aliases", "strengths"):
+                current_map[key] = []
+                current_list_key = key
+                in_recommended = False
+            elif key == "recommended":
+                current_map[key] = {}
+                current_list_key = None
+                in_recommended = True
+            else:
+                current_list_key = None
+                in_recommended = False
+            continue
+
+        if indent == 6 and current_list_key and stripped.startswith("- "):
+            current_map[current_list_key].append(parse_scalar(stripped[2:]))
+            continue
+
+        if indent == 6 and in_recommended and ":" in stripped:
+            key, value = stripped.split(":", 1)
+            current_map.setdefault("recommended", {})[key.strip()] = parse_scalar(value)
+            continue
+
+        if indent == 4 and ":" in stripped:
+            key, value = stripped.split(":", 1)
+            current_map[key.strip()] = parse_scalar(value)
+            current_list_key = None
+            in_recommended = False
+
+    return catalog
 
 
 def print_model_list(catalog):
@@ -134,6 +225,9 @@ def print_model_list(catalog):
             ctx = m.get("context_k", "?")
             ctx_str = f"{ctx}K" if isinstance(ctx, int) else str(ctx)
             print(f"  {name:<22} T={r.get('temperature', '?'):<5} ctx={ctx_str:<8} {m.get('speed', '')}")
+            aliases = m.get("aliases") or []
+            if aliases:
+                print(f"      aliases: {', '.join(aliases)}")
             for s in m.get("strengths", []):
                 print(f"      - {s}")
             print()
@@ -153,6 +247,17 @@ def print_model_list(catalog):
         print("Task presets (--task <name> \"prompt\"):")
         for name, t in tasks.items():
             print(f"  --task {name:<12} -> {t.get('model', '?'):<22} T={t.get('temperature', '?'):<5} max={t.get('max_tokens', '?')}")
+
+
+def resolve_model_alias(catalog, model):
+    """Return the canonical model id for a catalog alias, if known."""
+    models = catalog.get("models", {})
+    if model in models:
+        return model
+    for name, meta in models.items():
+        if model in (meta.get("aliases") or []):
+            return name
+    return model
 
 
 DENY_SUBSTR = (".ssh/", ".aws/", ".gnupg/", "Library/Keychains/",
@@ -406,6 +511,8 @@ def main():
             # Only override max_tokens if still at argparse default
             if args.max_tokens == 4096:
                 args.max_tokens = preset.get("max_tokens", args.max_tokens)
+
+    args.model = resolve_model_alias(catalog, args.model)
 
     prompt = args.question or " ".join(args.prompt)
     if not prompt:

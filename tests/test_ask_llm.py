@@ -107,6 +107,44 @@ class ConfigLoadingTests(unittest.TestCase):
             os.environ.pop("ASK_LLM_URL", None)
 
 
+class ModelCatalogTests(unittest.TestCase):
+
+    def test_load_models_reads_aliases_without_pyyaml(self):
+        model_file = self.tmp_model_file(
+            """
+models:
+  gemma-4:
+    aliases:
+      - gemma4
+    type: local
+tasks: {}
+"""
+        )
+
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "yaml":
+                raise ImportError("no yaml")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch.object(ask_llm, "MODELS_FILE", model_file), \
+             mock.patch("builtins.__import__", fake_import):
+            catalog = ask_llm.load_models()
+
+        self.assertEqual(
+            ask_llm.resolve_model_alias(catalog, "gemma4"),
+            "gemma-4",
+        )
+
+    def tmp_model_file(self, content):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+        self.addCleanup(lambda: os.path.exists(tmp.name) and os.unlink(tmp.name))
+        with tmp:
+            tmp.write(content)
+        return Path(tmp.name)
+
+
 def _fake_response(content="ok", prompt_tokens=10, completion_tokens=5):
     """Build a fake urllib response object."""
     body = json.dumps({
@@ -172,6 +210,12 @@ class CLIIntegrationTests(unittest.TestCase):
         self.assertEqual(req["body"]["messages"][0]["content"], "What is 2+2?")
         self.assertEqual(req["body"]["model"], "test-model")
         self.assertEqual(req["headers"]["Authorization"], "Bearer test-token")
+
+    def test_model_alias_resolves_before_request(self):
+        catalog = {"models": {"gemma-4": {"aliases": ["gemma4"]}}, "tasks": {}}
+        with mock.patch.object(ask_llm, "load_models", return_value=catalog):
+            _, _, req = self._run(["--model", "gemma4", "Svar berre: OK"])
+        self.assertEqual(req["body"]["model"], "gemma-4")
 
     def test_q_flag_with_paths_wraps_files(self):
         f1 = self.tmp / "a.py"

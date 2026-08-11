@@ -78,6 +78,8 @@ models:
     cost: free
 
   gemma-4:
+    aliases:
+      - gemma4
     type: local
     backend: exo (mac1+mac2, MLX 4bit, MoE 26B A4B)
     # Gemma 4 26B A4B — 256K context, max output 32768 tokens
@@ -97,7 +99,8 @@ models:
       max_tokens: 8192
     cost: free
 
-  gemini-2.5-flash:
+  gemini/gemini-3.5-flash:
+    # Router alias verified live 2026-08-11 (gemini-2.5-flash no longer served by LiteLLM)
     type: cloud
     backend: Google AI API (via LiteLLM)
     # Context: 1M tokens input, 65536 output
@@ -115,7 +118,8 @@ models:
       max_tokens: 8192
     cost: paid
 
-  gemini-2.5-pro:
+  gemini-pro-latest:
+    # Router alias verified live 2026-08-11 (gemini-2.5-pro no longer served by LiteLLM)
     type: cloud
     backend: Google AI API (via LiteLLM)
     # Context: 1M tokens input, 65536 output
@@ -167,7 +171,7 @@ tasks:
     system: "Natural dialogue. Stay in character. Use varied, expressive language."
 
   summary:
-    model: gemini-2.5-flash
+    model: gemini/gemini-3.5-flash
     # Summarization: low temp for factual, deterministic output
     # Source: https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.5-flash
     temperature: 0.4
@@ -175,7 +179,7 @@ tasks:
     system: "Concise summary. Key points only. Use bullets, not prose."
 
   analysis:
-    model: gemini-2.5-pro
+    model: gemini-pro-latest
     # Deep analysis: moderate temp for balanced insight
     # Source: https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.5-pro
     temperature: 0.5
