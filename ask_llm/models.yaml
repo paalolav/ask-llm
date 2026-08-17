@@ -171,23 +171,31 @@ tasks:
     system: "Natural dialogue. Stay in character. Use varied, expressive language."
 
   summary:
-    model: gemini/gemini-3.5-flash
+    model: qwen3.6-27b
+    # Local-only (operator policy, sess 281, 2026-08-17): task presets must never route to a
+    # cloud API. --task sends the RESOLVED name straight to LiteLLM, bypassing the router's
+    # model_group_alias, so a cloud model here is a direct cloud call, not a fallback.
+    # Cloud models stay in the catalog above for explicit `--model gemini/...` research use.
     # Summarization: low temp for factual, deterministic output
-    # Source: https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.5-flash
     temperature: 0.4
     max_tokens: 2048
     system: "Concise summary. Key points only. Use bullets, not prose."
 
   analysis:
-    model: gemini-pro-latest
+    model: qwen3.6-27b
+    # Local-only (operator policy, sess 281, 2026-08-17) -- see the note under `summary`.
+    # NOTE: context ceiling drops ~1048K -> 262K vs the former gemini-pro-latest. A --paths
+    # corpus that used to fit will now error rather than silently succeed in the cloud.
     # Deep analysis: moderate temp for balanced insight
-    # Source: https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.5-pro
     temperature: 0.5
     max_tokens: 8192
     system: "Thorough analysis against the full corpus provided. Cite sources and line numbers."
 
   quick:
-    model: qwen3.5-4b
+    # Was `qwen3.5-4b` until 2026-08-17 -- that alias was DELETED from LiteLLM 2026-08-11
+    # (B-31) and the preset had been returning 403 ever since. `qwen3.5-9b` replaced it and
+    # is in the virtual-key scopes; LiteLLM's own `quick` alias already points there.
+    model: qwen3.5-9b
     # Fast single-turn: non-thinking instruct mode
     # Source: https://huggingface.co/Qwen/Qwen3.5-4B (thinking disabled by default in small models)
     temperature: 0.7
