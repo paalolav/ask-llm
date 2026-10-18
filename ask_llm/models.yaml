@@ -13,6 +13,24 @@
 #   Gemini 2.5 Pro docs:      https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.5-pro
 
 models:
+  qwen-flash:
+    type: local
+    backend: DGX Spark (vLLM, Qwen3.8-Flash-Next NVFP4)
+    # ~125B MoE with 6B active; served with max_model_len 500K. Thinking is pinned off in
+    # LiteLLM; use qwen-flash-think-medium for thinking.
+    context_k: 500
+    speed: fast
+    strengths:
+      - Long-context reading and summaries
+      - Agentic and coding work at high prefill speed
+    recommended:
+      # Non-thinking sampling as pinned in LiteLLM: temp=0.7, top_p=0.8, top_k=20, presence 1.5
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      max_tokens: 4096
+    cost: free
+
   qwen3.6-35b:
     type: local
     backend: exo (mac1+mac2, MLX 4bit DWQ)
